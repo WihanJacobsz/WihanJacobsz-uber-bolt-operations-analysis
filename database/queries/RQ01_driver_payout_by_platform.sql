@@ -215,12 +215,7 @@ pair_stats AS (
         COUNT(CASE WHEN tp.platform = pp.platform_a
                    THEN 1 END) AS n_a,
         COUNT(CASE WHEN tp.platform = pp.platform_b
-                   THEN 1 END) AS n_b,
-
-        STATS_T_TEST_INDEPU(tp.platform, tp.payout, 'STATISTIC')
-            AS t_statistic,
-        STATS_T_TEST_INDEPU(tp.platform, tp.payout, 'TWO_SIDED_SIG')
-            AS p_value
+                   THEN 1 END) AS n_b
 
     FROM platform_pairs pp
 
@@ -230,6 +225,22 @@ pair_stats AS (
     GROUP BY
         pp.platform_a,
         pp.platform_b
+),
+
+welch AS (
+    SELECT
+        platform_a,
+        platform_b,
+        avg_a,
+        avg_b,
+        avg_a - avg_b AS diff,
+        SQRT(var_a / n_a + var_b / n_b) AS std_error,
+        POWER(var_a / n_a + var_b / n_b, 2)
+        / (
+            POWER(var_a / n_a, 2) / (n_a - 1)
+            + POWER(var_b / n_b, 2) / (n_b - 1)
+          ) AS degrees_of_freedom
+    FROM pair_stats
 )
 
 SELECT
@@ -239,31 +250,25 @@ SELECT
     ROUND(avg_a, 2) AS avg_payout_a_zar,
     ROUND(avg_b, 2) AS avg_payout_b_zar,
 
-    ROUND(avg_a - avg_b, 2) AS payout_difference_zar,
+    ROUND(diff, 2) AS payout_difference_zar,
 
-    ROUND(
-        (avg_a - avg_b)
-        - 1.96 * SQRT(var_a / n_a + var_b / n_b),
-        2
-    ) AS ci95_lower_zar,
+    ROUND(diff - 1.96 * std_error, 2)
+        AS ci95_lower_zar,
 
-    ROUND(
-        (avg_a - avg_b)
-        + 1.96 * SQRT(var_a / n_a + var_b / n_b),
-        2
-    ) AS ci95_upper_zar,
+    ROUND(diff + 1.96 * std_error, 2)
+        AS ci95_upper_zar,
 
-    ROUND(ABS(t_statistic), 3) AS abs_t_statistic,
+    ROUND(diff / std_error, 3) AS t_statistic,
 
-    TO_CHAR(p_value, '9.99EEEE') AS p_value,
+    ROUND(degrees_of_freedom, 0) AS degrees_of_freedom,
 
     CASE
-        WHEN p_value < 0.05
+        WHEN ABS(diff / std_error) > 1.96
         THEN 'Yes'
         ELSE 'No'
     END AS significant_at_5pct
 
-FROM pair_stats
+FROM welch
 
 ORDER BY
     payout_difference_zar DESC;
